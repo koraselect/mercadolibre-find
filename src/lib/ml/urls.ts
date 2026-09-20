@@ -53,10 +53,16 @@ export function parseMeliInput(input: string): MercadoLibreItemId | null {
     };
   }
 
+  // Limpiar URL: quitar fragmentos (#...) y tracking params
+  let cleanUrl = value;
+  const hashIdx = cleanUrl.indexOf("#");
+  if (hashIdx !== -1) cleanUrl = cleanUrl.slice(0, hashIdx);
+  cleanUrl = cleanUrl.split("?")[0];
+
   // Intentar parsear URL
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(cleanUrl);
   } catch {
     return null;
   }
