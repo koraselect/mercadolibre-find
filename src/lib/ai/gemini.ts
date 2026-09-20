@@ -4,8 +4,9 @@ import { logger } from "@/lib/logging/logger";
 import type { MercadoLibreItem } from "@/lib/ml/types";
 import type { AIProvider } from "@/lib/ai/types";
 import { fingerprintSchema, type ProductFingerprint } from "@/lib/ai/schemas/fingerprint";
-import type { AIMatchResult } from "@/lib/ai/schemas/matching";
+import { matchResultSchema, type AIMatchResult } from "@/lib/ai/schemas/matching";
 import { buildFingerprintPrompt } from "@/lib/ai/prompts/fingerprint";
+import { buildMatchingPrompt } from "@/lib/ai/prompts/matching";
 
 /**
  * Proveedor Gemini (TODO §16, §37, §40).
@@ -92,13 +93,29 @@ export class GeminiProvider implements AIProvider {
     throw new AIValidationError("El fingerprint generado no cumplió el esquema esperado.");
   }
 
-  // Fase 4: se implementa el matching. Por ahora el pipeline solo usa fingerprint.
-  async matchCandidate(): Promise<AIMatchResult> {
-    throw new AppError(
-      "AI_MATCH_NOT_IMPLEMENTED",
-      "El matching con Gemini se implementa en la Fase 4.",
-      { status: 501 }
-    );
+  async matchCandidate(
+    source: MercadoLibreItem,
+    candidate: MercadoLibreItem,
+    fingerprint: ProductFingerprint
+  ): Promise<AIMatchResult> {
+    const prompt = buildMatchingPrompt(source, candidate, fingerprint);
+    let repair = "";
+    for (let attempt = 0; attempt < SCHEMA_ATTEMPTS; attempt++) {
+      const rawText = await this.generateContent(prompt.system, prompt.user + repair);
+      const json = parseJsonText(rawText);
+      if (json === null) {
+        throw new AIValidationError("Gemini devolvió una respuesta no parseable para matching.");
+      }
+      const parsed = matchResultSchema.safeParse(json);
+      if (parsed.success) return parsed.data;
+      repair = FINGERPRINT_REPAIR_NOTE;
+      logger.warn("ai.gemini.match_schema_retry", {
+        attempt,
+        sourceId: source.id?.rawId,
+        candidateId: candidate.id?.rawId,
+      });
+    }
+    throw new AIValidationError("El resultado de matching no cumplió el esquema esperado.");
   }
 
   private async generateContent(system: string, user: string): Promise<string> {
