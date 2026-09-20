@@ -2,16 +2,17 @@
 
 import { useState } from "react";
 import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown } from "lucide-react";
-import { searchMultipleQueries, type MLCandidate } from "@/lib/ml/client-search";
+import { searchMultipleQueries } from "@/lib/ml/client-search";
+
+const ML_API = "https://api.mercadolibre.com";
 
 interface SourceInfo {
-  sourceId: string;
-  sourcePrice: number | null;
-  sourceTitle: string | null;
-  sourceBrand: string | null;
-  sourceModel: string | null;
-  channel: string;
-  queries: string[];
+  id: string;
+  title: string | null;
+  price: number | null;
+  currency: string | null;
+  permalink: string | null;
+  attributes: Record<string, string>;
 }
 
 interface Alternative {
@@ -32,6 +33,13 @@ interface MatchResult {
   alternatives: Alternative[];
 }
 
+function extractIdFromUrl(url: string): string | null {
+  const clean = url.split("?")[0].split("#")[0];
+  const m = clean.match(/([A-Z]{3})-?(\d{6,})/i);
+  if (!m) return null;
+  return (m[1].toUpperCase() + m[2]);
+}
+
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [step, setStep] = useState<"idle" | "resolving" | "searching" | "matching" | "done">("idle");
@@ -48,37 +56,66 @@ export default function HomePage() {
     setSourceInfo(null);
 
     try {
-      // Paso 1: resolver source item + obtener queries
-      const resolveRes = await fetch("/api/opportunity", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim() }),
-      });
-      const resolveData = await resolveRes.json();
-
-      if (!resolveData.ok) {
-        throw new Error(resolveData.message || "Error al resolver el producto");
+      const itemId = extractIdFromUrl(url.trim());
+      if (!itemId) {
+        throw new Error("No se pudo extraer el ID del producto de la URL");
       }
 
-      setSourceInfo(resolveData);
+      // Paso 1: resolver source item desde el navegador
+      const itemRes = await fetch(`${ML_API}/items/${itemId}`);
+      if (!itemRes.ok) {
+        throw new Error(`No se pudo obtener el producto (HTTP ${itemRes.status})`);
+      }
+      const itemData = await itemRes.json();
 
-      // Paso 2: buscar candidatos desde el navegador
+      const source: SourceInfo = {
+        id: itemData.id,
+        title: itemData.title ?? null,
+        price: itemData.price ?? null,
+        currency: itemData.currency_id ?? null,
+        permalink: itemData.permalink ?? null,
+        attributes: {},
+      };
+
+      // Extract attributes
+      if (Array.isArray(itemData.attributes)) {
+        for (const attr of itemData.attributes) {
+          if (attr.id && attr.value_name) {
+            source.attributes[attr.id] = attr.value_name;
+          }
+        }
+      }
+
+      setSourceInfo(source);
+
+      // Paso 2: generar queries simples desde titulo
+      const title = source.title ?? "";
+      const queries: string[] = [];
+      const words = title.split(/\s+/).filter((w: string) => w.length > 2);
+      if (words.length > 0) queries.push(words.slice(0, 4).join(" "));
+      if (words.length > 3) queries.push(words.slice(0, 6).join(" "));
+      if (source.attributes["BRAND"] && source.attributes["MODEL"]) {
+        queries.push(`${source.attributes["BRAND"]} ${source.attributes["MODEL"]}`);
+      }
+
+      // Paso 3: buscar candidatos desde el navegador
       setStep("searching");
+      const site = itemId.slice(0, 3);
       const { candidates, totalFetched, queriesUsed } = await searchMultipleQueries(
-        resolveData.queries,
-        resolveData.sourceId?.slice(0, 3) ?? "MLV",
+        queries.length > 0 ? queries : [title.slice(0, 60)],
+        site,
         10
       );
       setSearchStats({ totalFetched, queriesUsed: queriesUsed.length });
 
-      // Paso 3: enviar candidatos al servidor para filtrar
+      // Paso 4: enviar candidatos al match endpoint
       setStep("matching");
       const matchRes = await fetch("/api/opportunity/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sourceId: resolveData.sourceId,
-          sourcePrice: resolveData.sourcePrice,
+          sourceId: source.id,
+          sourcePrice: source.price,
           candidates: candidates.map((c) => ({
             id: c.id,
             title: c.title,
@@ -86,6 +123,7 @@ export default function HomePage() {
             currency: c.currency,
             permalink: c.permalink,
             sellerId: c.sellerId,
+            thumbnail: c.thumbnail,
           })),
         }),
       });
@@ -117,7 +155,6 @@ export default function HomePage() {
         </p>
       </div>
 
-      {/* URL Input */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -152,19 +189,17 @@ export default function HomePage() {
         </p>
       </form>
 
-      {/* Progress */}
       {step !== "idle" && step !== "done" && (
         <div className="mt-8 flex items-center justify-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
           <span>
-            {step === "resolving" && "Resolviendo producto..."}
+            {step === "resolving" && "Obteniendo datos del producto..."}
             {step === "searching" && "Buscando alternativas en MercadoLibre..."}
-            {step === "matching" && "Analizando candidatos..."}
+            {step === "matching" && "Comparando precios..."}
           </span>
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-800 dark:bg-red-950">
           <AlertCircle className="size-6 mx-auto text-red-600 dark:text-red-400 mb-2" />
@@ -173,47 +208,28 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Source Info */}
       {sourceInfo && (
         <div className="mt-8 rounded-xl border bg-card p-6">
           <h3 className="font-semibold text-lg">Producto fuente</h3>
           <div className="mt-2 flex flex-wrap gap-4 text-sm">
-            <span className="text-muted-foreground">ID: {sourceInfo.sourceId}</span>
-            {sourceInfo.sourceTitle && (
-              <span className="font-medium">{sourceInfo.sourceTitle}</span>
+            <span className="text-muted-foreground">ID: {sourceInfo.id}</span>
+            {sourceInfo.title && (
+              <span className="font-medium">{sourceInfo.title}</span>
             )}
-            {sourceInfo.sourcePrice != null && (
+            {sourceInfo.price != null && (
               <span className="text-green-600 dark:text-green-400 font-bold">
-                ${sourceInfo.sourcePrice.toFixed(2)}
+                {sourceInfo.currency ?? "$"}{sourceInfo.price.toFixed(2)}
               </span>
             )}
-            <span className="text-xs text-muted-foreground">
-              Canal: {sourceInfo.channel}
-            </span>
           </div>
-          {sourceInfo.queries.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {sourceInfo.queries.map((q, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                >
-                  {q}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
-      {/* Results */}
       {result && (
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>
-              {result.totalCandidates} candidatos evaluados
-            </span>
-            <span>{searchStats.queriesUsed} queries de busqueda</span>
+            <span>{result.totalCandidates} candidatos evaluados</span>
+            <span>{searchStats.queriesUsed} queries</span>
           </div>
 
           {result.alternatives.length === 0 ? (
@@ -227,10 +243,7 @@ export default function HomePage() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               {result.alternatives.map((alt) => (
-                <div
-                  key={alt.itemId}
-                  className="rounded-xl border bg-card p-4"
-                >
+                <div key={alt.itemId} className="rounded-xl border bg-card p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
