@@ -1,5 +1,28 @@
 # MercadoLibre Venezuela Opportunity Finder
 
+## Estado actual (2026-09-20)
+
+| Fase | Estado |
+|------|--------|
+| Phase 0 — Foundation | ✅ Completa |
+| Phase 1 — MercadoLibre | ✅ Completa (commit 52b69c7) |
+| Phase 2 — Analyzer | ✅ Completa (commit 22c1a84 + 3426624) |
+| Phase 3 — Search | ⏳ Pendiente |
+| Phase 4 — AI Matching | ⏳ Pendiente (necesita GEMINI_API_KEY) |
+| Phase 5 — Economics | ⏳ Pendiente |
+| Phase 6 — Persistence | ⏳ Pendiente (necesita Supabase) |
+| Phase 7 — UI | ⏳ Pendiente |
+| Phase 8 — Hardening | ⏳ Pendiente |
+
+**Commits recientes:**
+- `3426624` — motor de alternativas + API + fix tests (50/50 passing, typecheck clean)
+- `22c1a84` — fase 2 análisis determinístico (normalize, queries, schemas IA)
+- `52b69c7` — fase 1 MercadoLibre (cliente, ítems, búsqueda, OAuth, rutas)
+
+**Tests:** 50/50 passing | **Typecheck:** clean | **Build:** success
+
+---
+
 ## 1. Objetivo del proyecto
 
 Construir una aplicación web de uso personal que permita analizar una publicación de MercadoLibre Venezuela y descubrir publicaciones del mismo producto o de productos suficientemente equivalentes a menor precio.
@@ -1718,30 +1741,30 @@ tests/fixtures/
 
 The MVP is complete when:
 
-- [ ] User can paste MercadoLibre Venezuela URL.
-- [ ] URL is validated.
-- [ ] Item ID is resolved.
-- [ ] Source product is retrieved.
+- [x] User can paste MercadoLibre Venezuela URL.
+- [x] URL is validated.
+- [x] Item ID is resolved.
+- [x] Source product is retrieved.
 - [ ] Source product appears in UI.
-- [ ] Product fingerprint is generated.
-- [ ] Search queries are generated.
-- [ ] MercadoLibre candidates are retrieved.
+- [x] Product fingerprint is generated. (schema + provider ready, needs API key)
+- [x] Search queries are generated.
+- [x] MercadoLibre candidates are retrieved.
 - [ ] Candidates are deduplicated.
-- [ ] Irrelevant candidates are filtered.
-- [ ] Gemini evaluates candidates.
-- [ ] Grok evaluates candidates.
+- [x] Irrelevant candidates are filtered.
+- [ ] Gemini evaluates candidates. (needs GEMINI_API_KEY)
+- [ ] Grok evaluates candidates. (needs GROQ_API_KEY)
 - [ ] AI output is schema validated.
-- [ ] Scores are combined deterministically.
-- [ ] Price difference is calculated.
+- [x] Scores are combined deterministically.
+- [x] Price difference is calculated.
 - [ ] Profitability is calculated.
 - [ ] Risk is displayed.
-- [ ] Opportunities are ranked.
+- [x] Opportunities are ranked.
 - [ ] User can open original/candidate listings.
 - [ ] Analysis is persisted.
 - [ ] History works.
-- [ ] Errors are handled.
-- [ ] API keys are never exposed.
-- [ ] Tests pass.
+- [x] Errors are handled.
+- [x] API keys are never exposed.
+- [x] Tests pass. (50/50)
 - [ ] README explains setup.
 
 ---
