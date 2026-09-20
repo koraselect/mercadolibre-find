@@ -2,18 +2,16 @@
 
 import { useState, useRef, useCallback } from "react";
 import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Image as ImageIcon, Check, Pause } from "lucide-react";
-import { searchMultipleQueries, type MLCandidate } from "@/lib/ml/client-search";
 
 interface Candidate {
   title: string;
   url: string;
+  snippet: string;
   itemId: string | null;
   price: number | null;
   currency: string | null;
   imageUrl: string | null;
   isPaused: boolean;
-  condition: string | null;
-  freeShipping: boolean;
 }
 
 interface SourceData {
@@ -38,28 +36,68 @@ function extractItemId(url: string): string | null {
   return m ? m[1].toUpperCase() + m[2] : null;
 }
 
+function extractPrice(text: string): number | null {
+  const patterns = [
+    /US\$\s*([\d.,]+)/i,
+    /(?:USD|\$)\s*([\d.,]+)/i,
+    /(?:Bs\.?|VES)\s*([\d.,]+)/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) {
+      const numStr = m[1].replace(/\./g, "").replace(",", ".");
+      const num = parseFloat(numStr);
+      if (num > 0 && num < 1000000) return num;
+    }
+  }
+  return null;
+}
+
 function buildQueries(keywords: string): string[] {
   const words = keywords.split(/\s+/).filter((w) => w.length > 2);
   const queries: string[] = [];
 
-  // Direct product search on ML
-  queries.push(keywords);
+  queries.push(`site:articulo.mercadolibre.com.ve ${keywords}`);
+  queries.push(`site:mercadolibre.com.ve ${keywords} precio`);
 
-  // Shorter query if many words
   if (words.length > 3) {
-    queries.push(words.slice(0, 4).join(" "));
+    queries.push(`site:articulo.mercadolibre.com.ve ${words.slice(0, 4).join(" ")}`);
   }
 
-  // With "precio" for broader match
-  queries.push(`${keywords} precio`);
-
   return queries;
+}
+
+/**
+ * Fetch images + prices from ML API (browser-side, CORS allowed).
+ */
+async function fetchMLItems(itemIds: string[]): Promise<Map<string, { thumbnail: string | null; price: number | null; title: string | null }>> {
+  const map = new Map<string, { thumbnail: string | null; price: number | null; title: string | null }>();
+
+  // Try items API from browser (CORS allowed on ML)
+  const promises = itemIds.map(async (id) => {
+    try {
+      const res = await fetch(`https://api.mercadolibre.com/items/${id}`, { mode: "cors" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.id) {
+        map.set(id, {
+          thumbnail: data.thumbnail ?? null,
+          price: data.price ?? null,
+          title: data.title ?? null,
+        });
+      }
+    } catch {
+      // CORS blocked or network error
+    }
+  });
+
+  await Promise.allSettled(promises);
+  return map;
 }
 
 /** Upgrade ML thumbnail to higher resolution */
 function upgradeThumbnail(thumbnail: string | null): string | null {
   if (!thumbnail) return null;
-  // Replace D_NQ_NP_ with D_NQ_NP_2X_ for 2x resolution
   return thumbnail.replace("D_NQ_NP_", "D_NQ_NP_2X_");
 }
 
@@ -143,7 +181,7 @@ async function apiFetchSource(url: string): Promise<SourceData | null> {
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [sourcePrice, setSourcePrice] = useState("");
-  const [step, setStep] = useState<"idle" | "extracting" | "searching" | "done">("idle");
+  const [step, setStep] = useState<"idle" | "extracting" | "searching" | "enriching" | "done">("idle");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [keywords, setKeywords] = useState("");
@@ -204,22 +242,51 @@ export default function HomePage() {
       const sourceItemId = extractItemId(url.trim());
       const queries = buildQueries(kws);
 
-      // Search directly via ML API from browser (instant, includes images + prices)
-      const { candidates: mlResults } = await searchMultipleQueries(queries, "MLV", 10);
+      // Step 1: Search via Firecrawl (server-side, works on Vercel)
+      const searchRes = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queries, sourceKeywords: kws, maxResults: 15 }),
+      });
+      const searchData = await searchRes.json();
+      if (!searchData.ok) throw new Error(searchData.error || "Error en busqueda");
 
-      const results: Candidate[] = mlResults
-        .filter((c: MLCandidate) => c.id !== sourceItemId)
-        .map((c: MLCandidate) => ({
-          title: c.title || "",
-          url: c.permalink || `https://articulo.mercadolibre.com.ve/${c.id}`,
-          itemId: c.id,
-          price: c.price,
-          currency: c.currency,
-          imageUrl: upgradeThumbnail(c.thumbnail),
+      let results: Candidate[] = searchData.results
+        .map((r: { title: string; url: string; snippet: string }) => ({
+          title: r.title,
+          url: r.url.split("?")[0],
+          snippet: r.snippet,
+          itemId: extractItemId(r.url),
+          price: extractPrice(r.snippet + " " + r.title),
+          currency: null,
+          imageUrl: null,
           isPaused: false,
-          condition: c.condition,
-          freeShipping: c.shipping?.free ?? false,
-        }));
+        }))
+        .filter((c: Candidate) => c.itemId && c.itemId !== sourceItemId);
+
+      // Step 2: Enrich with images + prices from ML API (browser-side)
+      const idsToFetch = results
+        .filter((c) => !c.price || !c.imageUrl)
+        .slice(0, 10)
+        .map((c) => c.itemId!)
+        .filter(Boolean);
+
+      if (idsToFetch.length > 0) {
+        setStep("enriching");
+        const mlData = await fetchMLItems(idsToFetch);
+        results = results.map((c) => {
+          if (c.itemId && mlData.has(c.itemId)) {
+            const ml = mlData.get(c.itemId)!;
+            return {
+              ...c,
+              price: ml.price && !c.price ? ml.price : c.price,
+              imageUrl: upgradeThumbnail(ml.thumbnail) || c.imageUrl,
+              title: ml.title || c.title,
+            };
+          }
+          return c;
+        });
+      }
 
       setCandidates(results);
       setStep("done");
@@ -255,11 +322,11 @@ export default function HomePage() {
           />
           <button
             type="submit"
-            disabled={step === "searching" || !url.trim()}
+            disabled={step === "searching" || step === "enriching" || !url.trim()}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            {step === "searching" ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-            {step === "searching" ? "Buscando..." : "Buscar"}
+            {step === "searching" || step === "enriching" ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            {step === "searching" ? "Buscando..." : step === "enriching" ? "Cargando datos..." : "Buscar"}
           </button>
         </div>
 
@@ -279,7 +346,6 @@ export default function HomePage() {
         </div>
       </form>
 
-      {/* Source preview card */}
       {sourceData && (sourceData.title || sourceData.imageUrl) && (
         <div className="w-full max-w-2xl mx-auto mt-4 rounded-xl border bg-card overflow-hidden">
           <div className="flex items-center gap-1 px-3 pt-2 text-xs text-muted-foreground">
@@ -321,10 +387,13 @@ export default function HomePage() {
         </div>
       )}
 
-      {step === "searching" && (
+      {(step === "searching" || step === "enriching") && (
         <div className="mt-8 flex items-center justify-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          <span>Buscando productos similares...</span>
+          <span>
+            {step === "searching" && "Buscando productos similares..."}
+            {step === "enriching" && "Cargando imágenes y precios..."}
+          </span>
         </div>
       )}
 
@@ -401,14 +470,6 @@ export default function HomePage() {
                               </span>
                             </div>
                           )}
-                          <div className="flex items-center gap-2 mt-1">
-                            {c.condition && (
-                              <span className="text-xs text-muted-foreground capitalize">{c.condition}</span>
-                            )}
-                            {c.freeShipping && (
-                              <span className="text-xs text-green-600 font-medium">Envío gratis</span>
-                            )}
-                          </div>
                         </div>
                         <div className="text-right shrink-0">
                           {c.price ? (
