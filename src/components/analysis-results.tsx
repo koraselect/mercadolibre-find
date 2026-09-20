@@ -5,16 +5,16 @@ import { OpportunityCard } from "./opportunity-card";
 import { Loader2, BarChart3, Search } from "lucide-react";
 
 interface AnalysisResult {
-  sourceId: string;
-  sourcePrice: number;
-  channel: string;
-  queries: string[];
-  stats: {
-    totalFetched: number;
-    uniqueCandidates: number;
-    sentToAI: number;
+  sourceId?: string;
+  sourcePrice?: number;
+  channel?: string;
+  queries?: string[];
+  stats?: {
+    totalFetched?: number;
+    uniqueCandidates?: number;
+    sentToAI?: number;
   };
-  alternatives: Array<{
+  alternatives?: Array<{
     itemId: string;
     title: string;
     price: number;
@@ -55,16 +55,18 @@ export function AnalysisResults({ result, isLoading, error }: AnalysisResultsPro
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <BarChart3 className="size-4" />
-        <span>
-          {result.stats.uniqueCandidates} candidatos evaluados,{' '}
-          {result.stats.sentToAI} enviados a IA
-        </span>
-        <span className="text-xs">({result.channel})</span>
-      </div>
+      {result.stats && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <BarChart3 className="size-4" />
+          <span>
+            {result.stats.uniqueCandidates ?? 0} candidatos evaluados,{' '}
+            {result.stats.sentToAI ?? 0} enviados a IA
+          </span>
+          {result.channel && <span className="text-xs">({result.channel})</span>}
+        </div>
+      )}
 
-      {result.alternatives.length === 0 ? (
+      {(!result.alternatives || result.alternatives.length === 0) ? (
         <div className="rounded-xl border bg-card p-8 text-center">
           <Search className="size-8 mx-auto text-muted-foreground mb-3" />
           <p className="font-medium">No se encontraron alternativas mas baratas</p>
@@ -74,7 +76,7 @@ export function AnalysisResults({ result, isLoading, error }: AnalysisResultsPro
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
-          {result.alternatives.map((alt) => (
+          {(result.alternatives ?? []).map((alt) => (
             <OpportunityCard
               key={alt.itemId}
               title={alt.title}
