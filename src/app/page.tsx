@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Zap, Image as ImageIcon } from "lucide-react";
+import { useState, useRef, useCallback } from "react";
+import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Zap, Image as ImageIcon, Check } from "lucide-react";
 
 interface Candidate {
   title: string;
@@ -11,6 +11,14 @@ interface Candidate {
   price: number | null;
   currency: string | null;
   imageUrl: string | null;
+}
+
+interface SourceData {
+  title: string | null;
+  price: number | null;
+  currency: string | null;
+  imageUrl: string | null;
+  itemId: string | null;
 }
 
 function extractKeywords(url: string): string {
@@ -48,14 +56,11 @@ function buildQueries(keywords: string): string[] {
   const words = keywords.split(/\s+/).filter((w) => w.length > 2);
   const queries: string[] = [];
 
-  // Most specific: full keywords on ML Venezuela
   queries.push(`site:articulo.mercadolibre.com.ve ${keywords}`);
 
-  // Category listing
   const slug = words.join("-");
   queries.push(`site:mercadolibre.com.ve ${keywords} precio`);
 
-  // If 4+ words, also try shorter query
   if (words.length > 3) {
     queries.push(`site:articulo.mercadolibre.com.ve ${words.slice(0, 4).join(" ")}`);
   }
@@ -63,13 +68,143 @@ function buildQueries(keywords: string): string[] {
   return queries;
 }
 
+/**
+ * Option A: Browser fetch - the browser fetches the ML page directly.
+ * ML serves full HTML to browsers (no verification wall).
+ */
+async function browserFetchSource(url: string): Promise<SourceData | null> {
+  try {
+    const res = await fetch(url, {
+      credentials: "omit",
+      headers: { Accept: "text/html" },
+      redirect: "follow",
+    });
+    if (!res.ok) return null;
+
+    const html = await res.text();
+
+    // Verify it's a real product page, not a verification wall
+    if (html.includes("suspicious-traffic") || html.includes("verificación")) return null;
+
+    const itemId = extractItemId(url);
+
+    // Extract title
+    const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    let title = titleTag?.[1]?.trim() ?? null;
+    if (title) {
+      title = title.replace(/\s*-\s*(?:US\$\s*[\d.,]+|(?:USD|\$)\s*[\d.,]+|Bs\.?\s*[\d.,]+)\s*$/i, "").trim();
+    }
+
+    // Extract price from meta itemprop="price"
+    let price: number | null = null;
+    const priceMeta = html.match(/<meta\s+itemprop="price"\s+content="([^"]+)"/i);
+    if (priceMeta) {
+      price = parseFloat(priceMeta[1]);
+      if (isNaN(price)) price = null;
+    }
+
+    // Fallback: aria-label
+    if (price === null) {
+      const ariaPrice = html.match(/aria-label="(\d+)\s*dólares?\s*con\s*(\d+)\s*centavos?"/i);
+      if (ariaPrice) price = parseFloat(`${ariaPrice[1]}.${ariaPrice[2]}`);
+    }
+
+    // Fallback: og:title
+    if (price === null && titleTag) {
+      const pm = titleTag[1].match(/US\$\s*([\d.,]+)/i);
+      if (pm) {
+        price = parseFloat(pm[1].replace(/\./g, "").replace(",", "."));
+        if (isNaN(price)) price = null;
+      }
+    }
+
+    // Extract image from og:image
+    const ogImage = html.match(/<meta\s+(?:property|name)="og:image"\s+content="([^"]+)"/i)
+      ?? html.match(/<meta\s+content="([^"]+)"\s+(?:property|name)="og:image"/i);
+    let imageUrl = ogImage?.[1] ?? null;
+
+    if (!imageUrl) {
+      const thumbMatch = html.match(/ui-pdp-outside_variations__thumbnails__item__picture[^>]+src="([^"]+)"/i);
+      if (thumbMatch) imageUrl = thumbMatch[1];
+    }
+
+    return { title, price, currency: price !== null ? "USD" : null, imageUrl, itemId };
+  } catch {
+    // CORS or network error
+    return null;
+  }
+}
+
+/**
+ * Option B: API fallback - server-side Firecrawl scrape.
+ */
+async function apiFetchSource(url: string): Promise<SourceData | null> {
+  try {
+    const res = await fetch("/api/scrape-source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const data = await res.json();
+    if (data.ok) return data as SourceData;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [sourcePrice, setSourcePrice] = useState("");
-  const [step, setStep] = useState<"idle" | "searching" | "scraping" | "done">("idle");
+  const [step, setStep] = useState<"idle" | "extracting" | "searching" | "scraping" | "done">("idle");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [keywords, setKeywords] = useState("");
+  const [sourceData, setSourceData] = useState<SourceData | null>(null);
+  const [extractionMethod, setExtractionMethod] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-extract source data when URL changes
+  const handleUrlChange = useCallback(async (newUrl: string) => {
+    setUrl(newUrl);
+    setSourceData(null);
+    setExtractionMethod(null);
+
+    if (!newUrl.includes("mercadolibre")) return;
+
+    setStep("extracting");
+
+    // Option A: Browser fetch first
+    const browserData = await browserFetchSource(newUrl);
+    if (browserData && (browserData.title || browserData.price !== null)) {
+      setSourceData(browserData);
+      setExtractionMethod("browser");
+      if (browserData.price && !sourcePrice) {
+        setSourcePrice(browserData.price.toString());
+      }
+      setStep("idle");
+      return;
+    }
+
+    // Option B: API fallback
+    const apiData = await apiFetchSource(newUrl);
+    if (apiData && (apiData.title || apiData.price !== null)) {
+      setSourceData(apiData);
+      setExtractionMethod("api");
+      if (apiData.price && !sourcePrice) {
+        setSourcePrice(apiData.price.toString());
+      }
+    }
+
+    setStep("idle");
+  }, [sourcePrice]);
+
+  const handleUrlInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => handleUrlChange(val), 600);
+    setUrl(val);
+  };
 
   const handleSearch = async () => {
     if (!url.trim()) return;
@@ -108,7 +243,7 @@ export default function HomePage() {
 
       // Step 2: Scrape top results for prices + images
       const urlsToScrape = results
-        .filter((c) => !c.price)
+        .filter((c) => !c.price || !c.imageUrl)
         .slice(0, 6)
         .map((c) => c.url);
 
@@ -122,14 +257,19 @@ export default function HomePage() {
           });
           const scrapeData = await scrapeRes.json();
           if (scrapeData.ok && scrapeData.results) {
-            const scrapeMap = new Map<string, { price: number | null; currency: string | null }>();
+            const scrapeMap = new Map<string, { price: number | null; currency: string | null; imageUrl: string | null }>();
             for (const sr of scrapeData.results) {
-              if (sr.url) scrapeMap.set(sr.url, { price: sr.price, currency: sr.currency });
+              if (sr.url) scrapeMap.set(sr.url, { price: sr.price, currency: sr.currency, imageUrl: sr.imageUrl });
             }
             results = results.map((c) => {
               const scraped = scrapeMap.get(c.url);
-              if (scraped && scraped.price && !c.price) {
-                return { ...c, price: scraped.price, currency: scraped.currency };
+              if (scraped) {
+                return {
+                  ...c,
+                  price: scraped.price && !c.price ? scraped.price : c.price,
+                  currency: scraped.currency || c.currency,
+                  imageUrl: scraped.imageUrl || c.imageUrl,
+                };
               }
               return c;
             });
@@ -166,17 +306,17 @@ export default function HomePage() {
           <input
             type="text"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={handleUrlInput}
             placeholder="https://articulo.mercadolibre.com.ve/MLV-..."
             className="flex-1 rounded-lg border bg-background px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            disabled={step !== "idle"}
+            disabled={step !== "idle" && step !== "extracting"}
           />
           <button
             type="submit"
-            disabled={step !== "idle" || !url.trim()}
+            disabled={step === "searching" || step === "scraping" || !url.trim()}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            {step !== "idle" ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            {step === "searching" || step === "scraping" ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
             {step === "searching" ? "Buscando..." : step === "scraping" ? "Obteniendo precios..." : "Buscar"}
           </button>
         </div>
@@ -196,6 +336,41 @@ export default function HomePage() {
           </div>
         </div>
       </form>
+
+      {/* Source preview card */}
+      {sourceData && (sourceData.title || sourceData.imageUrl) && (
+        <div className="w-full max-w-2xl mx-auto mt-4 rounded-xl border bg-card overflow-hidden">
+          <div className="flex items-center gap-1 px-3 pt-2 text-xs text-muted-foreground">
+            <Check className="size-3 text-green-600" />
+            <span>Datos extraídos {extractionMethod === "browser" ? "(navegador)" : "(API)"}</span>
+          </div>
+          <div className="flex gap-3 p-3">
+            {sourceData.imageUrl && (
+              <div className="shrink-0 size-16 rounded-lg bg-muted overflow-hidden">
+                <img src={sourceData.imageUrl} alt="" className="w-full h-full object-cover" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              {sourceData.title && (
+                <p className="text-sm font-medium line-clamp-2">{sourceData.title}</p>
+              )}
+              {sourceData.price !== null && (
+                <p className="text-lg font-bold mt-1">${sourceData.price.toFixed(2)}</p>
+              )}
+              {sourceData.itemId && (
+                <p className="text-xs text-muted-foreground font-mono mt-1">{sourceData.itemId}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {step === "extracting" && (
+        <div className="w-full max-w-2xl mx-auto mt-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-3 animate-spin" />
+          <span>Extrayendo datos del producto...</span>
+        </div>
+      )}
 
       {error && (
         <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-800 dark:bg-red-950">
@@ -243,7 +418,6 @@ export default function HomePage() {
 
                 return (
                   <div key={c.itemId ?? i} className="rounded-xl border bg-card overflow-hidden">
-                    {/* Image placeholder area */}
                     <div className="h-32 bg-muted flex items-center justify-center relative">
                       {c.imageUrl ? (
                         <img

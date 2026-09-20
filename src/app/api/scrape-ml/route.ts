@@ -24,7 +24,7 @@ async function scrapeMLProduct(
     const app = new FirecrawlApp({ apiKey });
 
     const result = await app.scrapeUrl(url, {
-      formats: [{
+      formats: ["markdown", {
         type: "json",
         schema: {
           type: "object",
@@ -41,12 +41,25 @@ async function scrapeMLProduct(
 
     const json = (result as Record<string, unknown>).data as Record<string, unknown> | undefined;
     const extracted = json?.json as Record<string, unknown> | undefined;
+    const metadata = json?.metadata as Record<string, unknown> | undefined;
+
+    // Try to get image from metadata first, then markdown
+    let imageUrl: string | null = (metadata?.ogImage as string) ?? null;
+
+    if (!imageUrl) {
+      const markdown = json?.markdown as string | undefined;
+      if (markdown) {
+        // Look for image in markdown ![alt](url)
+        const imgMatch = markdown.match(/!\[[^\]]*\]\((https?:\/\/[^)]+\.(?:webp|jpg|jpeg|png)[^)]*)\)/i);
+        if (imgMatch) imageUrl = imgMatch[1];
+      }
+    }
 
     return {
       title: (extracted?.title as string) || "",
       price: typeof extracted?.price === "number" ? extracted.price : null,
       currency: (extracted?.currency as string) || null,
-      imageUrl: null,
+      imageUrl,
       url,
       itemId,
     };
