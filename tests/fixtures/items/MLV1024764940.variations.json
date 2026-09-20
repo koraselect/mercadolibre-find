@@ -1,0 +1,77 @@
+[
+  {
+    "id": 206652561763,
+    "price": 9.99,
+    "attribute_combinations": [
+      {
+        "id": "CABLE_JACKET_COLOR",
+        "name": "Color de la cubierta",
+        "value_id": "52049",
+        "value_name": "Negro",
+        "values": [
+          {
+            "id": "52049",
+            "name": "Negro",
+            "struct": null
+          }
+        ],
+        "value_type": "string"
+      }
+    ],
+    "sale_terms": [],
+    "picture_ids": [
+      "767312-MLV115301866660_082026"
+    ],
+    "catalog_product_id": null
+  },
+  {
+    "id": 206635677451,
+    "price": 9.99,
+    "attribute_combinations": [
+      {
+        "id": "CABLE_JACKET_COLOR",
+        "name": "Color de la cubierta",
+        "value_id": "51993",
+        "value_name": "Rojo",
+        "values": [
+          {
+            "id": "51993",
+            "name": "Rojo",
+            "struct": null
+          }
+        ],
+        "value_type": "string"
+      }
+    ],
+    "sale_terms": [],
+    "picture_ids": [
+      "869422-MLV115302135002_082026"
+    ],
+    "catalog_product_id": null
+  },
+  {
+    "id": 206644478481,
+    "price": 9.99,
+    "attribute_combinations": [
+      {
+        "id": "CABLE_JACKET_COLOR",
+        "name": "Color de la cubierta",
+        "value_id": "52055",
+        "value_name": "Blanco",
+        "values": [
+          {
+            "id": "52055",
+            "name": "Blanco",
+            "struct": null
+          }
+        ],
+        "value_type": "string"
+      }
+    ],
+    "sale_terms": [],
+    "picture_ids": [
+      "769222-MLV116709323321_082026"
+    ],
+    "catalog_product_id": null
+  }
+]
