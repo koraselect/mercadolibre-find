@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseMeliInput } from "@/lib/ml/urls";
 import { resolveItem } from "@/lib/ml/resolve";
-import { createMeliHttpClient } from "@/lib/ml/client";
-import { searchCandidates } from "@/lib/ml/search";
 import { buildProductDigest } from "@/lib/analysis/normalize";
 import { buildFallbackSearchQueries } from "@/lib/analysis/search-queries";
 import { findCheaperAlternatives } from "@/lib/analysis/opportunity";
@@ -12,9 +10,22 @@ import { logger } from "@/lib/logging/logger";
 export const dynamic = "force-dynamic";
 
 const INPUT_MAX = 400;
-const MAX_QUERIES = 4;
-const SEARCH_LIMIT = 10;
 
+interface CandidateInput {
+  id: string;
+  title?: string | null;
+  price?: number | null;
+  currency?: string | null;
+  permalink?: string | null;
+  sellerId?: string | null;
+}
+
+/**
+ * POST /api/opportunity
+ * Paso 1: resuelve el source item + genera queries (servidor).
+ * El cliente hace la busqueda con esas queries y luego llama
+ * POST /api/opportunity/match con los candidates.
+ */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json().catch(() => null)) as { url?: unknown } | null;
   const raw = typeof body?.url === "string" ? body.url : "";
@@ -35,48 +46,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       title: digest.title,
       brand: digest.brand,
       model: digest.model,
-    }).slice(0, MAX_QUERIES);
-
-    const client = createMeliHttpClient();
-    const allCandidates = [];
-    for (const q of queries) {
-      try {
-        const results = await searchCandidates(client, q, { limit: SEARCH_LIMIT });
-        allCandidates.push(...results);
-      } catch (err) {
-        logger.debug("api.opportunity.search_fallback", {
-          q: q.slice(0, 80),
-          cause: String(err).slice(0, 120),
-        });
-      }
-    }
-
-    const { sourceId, sourcePrice, alternatives, evaluated } = findCheaperAlternatives(
-      item,
-      allCandidates
-    );
-
-    const headers = new Headers();
-    headers.set("X-Data-Channel", channel);
-    headers.set("Cache-Control", "no-store");
+    }).slice(0, 4);
 
     return NextResponse.json(
       {
         ok: true,
-        sourceId,
-        sourcePrice,
+        step: "search",
+        sourceId: digest.itemId,
+        sourcePrice: digest.price,
+        sourceTitle: digest.title,
+        sourceBrand: digest.brand,
+        sourceModel: digest.model,
         channel,
         queries,
-        evaluated,
-        alternatives,
       },
-      { headers }
+      { headers: { "Cache-Control": "no-store" } }
     );
   } catch (err) {
     logger.error("api.opportunity.error", { id: itemId.rawId, cause: String(err).slice(0, 200) });
     if (err instanceof AppError) return errorResponse(err);
     return errorResponse(
-      new AppError("INTERNAL", "Error al analizar la oportunidad.", { status: 500 })
+      new AppError("INTERNAL", "Error al resolver el producto.", { status: 500 })
     );
   }
 }
