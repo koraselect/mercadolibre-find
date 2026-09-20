@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Zap } from "lucide-react";
+import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Zap, Image as ImageIcon } from "lucide-react";
 
 interface Candidate {
   title: string;
@@ -9,6 +9,8 @@ interface Candidate {
   snippet: string;
   itemId: string | null;
   price: number | null;
+  currency: string | null;
+  imageUrl: string | null;
 }
 
 function extractKeywords(url: string): string {
@@ -27,9 +29,9 @@ function extractItemId(url: string): string | null {
 
 function extractPrice(text: string): number | null {
   const patterns = [
+    /US\$\s*([\d.,]+)/i,
     /(?:USD|\$)\s*([\d.,]+)/i,
     /(?:Bs\.?|VES)\s*([\d.,]+)/i,
-    /precio[:\s]*(?:USD|\$|Bs\.?)?\s*([\d.,]+)/i,
   ];
   for (const p of patterns) {
     const m = text.match(p);
@@ -42,14 +44,32 @@ function extractPrice(text: string): number | null {
   return null;
 }
 
+function buildQueries(keywords: string): string[] {
+  const words = keywords.split(/\s+/).filter((w) => w.length > 2);
+  const queries: string[] = [];
+
+  // Most specific: full keywords on ML Venezuela
+  queries.push(`site:articulo.mercadolibre.com.ve ${keywords}`);
+
+  // Category listing
+  const slug = words.join("-");
+  queries.push(`site:mercadolibre.com.ve ${keywords} precio`);
+
+  // If 4+ words, also try shorter query
+  if (words.length > 3) {
+    queries.push(`site:articulo.mercadolibre.com.ve ${words.slice(0, 4).join(" ")}`);
+  }
+
+  return queries;
+}
+
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [sourcePrice, setSourcePrice] = useState("");
-  const [step, setStep] = useState<"idle" | "searching" | "done">("idle");
+  const [step, setStep] = useState<"idle" | "searching" | "scraping" | "done">("idle");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [keywords, setKeywords] = useState("");
-  const [searchMethod, setSearchMethod] = useState<"tavily" | "ddg">("tavily");
 
   const handleSearch = async () => {
     if (!url.trim()) return;
@@ -63,76 +83,63 @@ export default function HomePage() {
       setKeywords(kws);
 
       const sourceItemId = extractItemId(url.trim());
+      const queries = buildQueries(kws);
 
-      if (searchMethod === "tavily") {
-        // Use Firecrawl search via server API
-        const res = await fetch("/api/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: `site:mercadolibre.com.ve ${kws}`,
-            maxResults: 15,
-          }),
-        });
-        const data = await res.json();
+      // Step 1: Search
+      const searchRes = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queries, sourceKeywords: kws, maxResults: 15 }),
+      });
+      const searchData = await searchRes.json();
+      if (!searchData.ok) throw new Error(searchData.error || "Error en busqueda");
 
-        if (!data.ok) throw new Error(data.error || "Error en la busqueda");
+      let results: Candidate[] = searchData.results
+        .map((r: { title: string; url: string; snippet: string }) => ({
+          title: r.title,
+          url: r.url.split("?")[0],
+          snippet: r.snippet,
+          itemId: extractItemId(r.url),
+          price: extractPrice(r.snippet + " " + r.title),
+          currency: null,
+          imageUrl: null,
+        }))
+        .filter((c: Candidate) => c.itemId && c.itemId !== sourceItemId);
 
-        const results: Candidate[] = data.results
-          .map((r: { title: string; url: string; snippet: string }) => {
-            const id = extractItemId(r.url);
-            return {
-              title: r.title,
-              url: r.url.split("?")[0],
-              snippet: r.snippet,
-              itemId: id,
-              price: extractPrice(r.snippet + " " + r.title),
-            };
-          })
-          .filter((c: Candidate) => c.itemId && c.itemId !== sourceItemId);
+      // Step 2: Scrape top results for prices + images
+      const urlsToScrape = results
+        .filter((c) => !c.price)
+        .slice(0, 6)
+        .map((c) => c.url);
 
-        setCandidates(results);
-      } else {
-        // Fallback: DuckDuckGo from browser
-        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent("site:mercadolibre.com.ve " + kws)}`;
-        const res = await fetch(ddgUrl, {
-          headers: { "User-Agent": "Mozilla/5.0", Accept: "text/html" },
-        });
-        const html = await res.text();
-
-        const results: Candidate[] = [];
-        const seen = new Set<string>();
-        const blocks = html.split(/class="result__body"/g);
-
-        for (const block of blocks) {
-          const titleMatch = block.match(/class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-          const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-          if (!titleMatch) continue;
-
-          const rawUrl = titleMatch[1];
-          const title = titleMatch[2].replace(/<[^>]+>/g, "").trim();
-          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-
-          const realUrlMatch = rawUrl.match(/uddg=([^&]+)/);
-          const realUrl = realUrlMatch ? decodeURIComponent(realUrlMatch[1]) : rawUrl;
-
-          if (!realUrl.includes("mercadolibre.com.ve")) continue;
-          const id = extractItemId(realUrl);
-          if (!id || seen.has(id) || id === sourceItemId) continue;
-          seen.add(id);
-
-          results.push({
-            title,
-            url: realUrl.split("?")[0],
-            snippet,
-            itemId: id,
-            price: extractPrice(snippet + " " + title),
+      if (urlsToScrape.length > 0) {
+        setStep("scraping");
+        try {
+          const scrapeRes = await fetch("/api/scrape-ml", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ urls: urlsToScrape }),
           });
+          const scrapeData = await scrapeRes.json();
+          if (scrapeData.ok && scrapeData.results) {
+            const scrapeMap = new Map<string, { price: number | null; currency: string | null }>();
+            for (const sr of scrapeData.results) {
+              if (sr.url) scrapeMap.set(sr.url, { price: sr.price, currency: sr.currency });
+            }
+            results = results.map((c) => {
+              const scraped = scrapeMap.get(c.url);
+              if (scraped && scraped.price && !c.price) {
+                return { ...c, price: scraped.price, currency: scraped.currency };
+              }
+              return c;
+            });
+          }
+        } catch {
+          // Continue without scraped prices
         }
-
-        setCandidates(results);
       }
 
+      setCandidates(results);
       setStep("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error desconocido");
@@ -169,8 +176,8 @@ export default function HomePage() {
             disabled={step !== "idle" || !url.trim()}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            {step === "searching" ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-            {step === "searching" ? "Buscando..." : "Buscar"}
+            {step !== "idle" ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            {step === "searching" ? "Buscando..." : step === "scraping" ? "Obteniendo precios..." : "Buscar"}
           </button>
         </div>
 
@@ -187,17 +194,6 @@ export default function HomePage() {
             />
             <span className="text-xs text-muted-foreground">USD</span>
           </div>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Zap className="size-3" />
-            <select
-              value={searchMethod}
-              onChange={(e) => setSearchMethod(e.target.value as "tavily" | "ddg")}
-              className="rounded border bg-background px-2 py-1 text-xs"
-            >
-              <option value="tavily">Tavily (IA)</option>
-              <option value="ddg">DuckDuckGo</option>
-            </select>
-          </div>
         </div>
       </form>
 
@@ -208,10 +204,13 @@ export default function HomePage() {
         </div>
       )}
 
-      {step === "searching" && (
+      {(step === "searching" || step === "scraping") && (
         <div className="mt-8 flex items-center justify-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          <span>Buscando productos similares con {searchMethod === "tavily" ? "Tavily AI" : "DuckDuckGo"}...</span>
+          <span>
+            {step === "searching" && "Buscando productos similares..."}
+            {step === "scraping" && "Obteniendo precios de productos..."}
+          </span>
         </div>
       )}
 
@@ -243,48 +242,68 @@ export default function HomePage() {
                 const pct = diff && srcPrice ? ((diff / srcPrice) * 100).toFixed(1) : null;
 
                 return (
-                  <div key={c.itemId ?? i} className="rounded-xl border bg-card p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        {diff && diff > 0 && pct && (
-                          <div className="flex items-center gap-1 mb-1">
-                            <TrendingDown className="size-4 text-green-600" />
-                            <span className="text-sm font-medium text-green-600">
-                              -{pct}% (ahorro ${diff.toFixed(2)})
-                            </span>
-                          </div>
-                        )}
-                        {diff && diff < 0 && (
-                          <div className="flex items-center gap-1 mb-1">
-                            <span className="text-sm font-medium text-red-600">
-                              +{Math.abs(parseFloat(pct!)).toFixed(1)}% (mas caro)
-                            </span>
-                          </div>
-                        )}
-                        <h4 className="font-medium line-clamp-2 text-sm">{c.title}</h4>
-                        <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-                          {c.snippet}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        {c.price ? (
-                          <div className="text-lg font-bold">${c.price.toFixed(2)}</div>
-                        ) : (
-                          <div className="text-sm text-muted-foreground italic">Ver precio</div>
-                        )}
-                      </div>
+                  <div key={c.itemId ?? i} className="rounded-xl border bg-card overflow-hidden">
+                    {/* Image placeholder area */}
+                    <div className="h-32 bg-muted flex items-center justify-center relative">
+                      {c.imageUrl ? (
+                        <img
+                          src={c.imageUrl}
+                          alt={c.title}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                          <ImageIcon className="size-8" />
+                          <span className="text-xs">Sin imagen</span>
+                        </div>
+                      )}
+                      {diff && diff > 0 && pct && (
+                        <div className="absolute top-2 left-2 bg-green-600 text-white text-xs font-bold px-2 py-1 rounded">
+                          -{pct}%
+                        </div>
+                      )}
+                      {diff && diff < 0 && (
+                        <div className="absolute top-2 left-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">
+                          +{Math.abs(parseFloat(pct!)).toFixed(1)}%
+                        </div>
+                      )}
                     </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground font-mono">{c.itemId}</span>
-                      <a
-                        href={c.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
-                      >
-                        <ExternalLink className="size-3" />
-                        Ver en ML
-                      </a>
+
+                    <div className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium line-clamp-2 text-sm">{c.title}</h4>
+                          {diff && diff > 0 && (
+                            <div className="flex items-center gap-1 mt-1">
+                              <TrendingDown className="size-3 text-green-600" />
+                              <span className="text-xs font-medium text-green-600">
+                                Ahorro: ${diff.toFixed(2)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          {c.price ? (
+                            <div className="text-lg font-bold">${c.price.toFixed(2)}</div>
+                          ) : (
+                            <div className="text-sm text-muted-foreground italic">Ver precio</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground font-mono">{c.itemId}</span>
+                        <a
+                          href={c.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                        >
+                          <ExternalLink className="size-3" />
+                          Ver en ML
+                        </a>
+                      </div>
                     </div>
                   </div>
                 );
