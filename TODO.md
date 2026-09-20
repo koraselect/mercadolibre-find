@@ -12,13 +12,15 @@
 | Phase 5 — Economics | ✅ Completa (commit 3c1c0cc) |
 | Phase 6 — Persistence | ✅ Completa (commit 9916afb) |
 | Phase 7 — UI | ✅ Completa (commit 3e0981f) |
-| Phase 8 — Hardening | ⏳ Pendiente |
+| Phase 8 — Hardening | ✅ Completa (commit f191d45) |
 
 **Commits recientes:**
+- `f191d45` — fase 8: hardening (retry, cache, security, README)
+- `4ed9e6f` — fix: AnalysisResults null checks
 - `3e0981f` — fase 7: UI (home, URL form, resultados, historial, ajustes)
 - `9916afb` — fase 6: persistence (Supabase + repositorios + historial)
 - `3c1c0cc` — fases 3-5: search orchestration, AI matching, economics
-- `3426624` — motor de alternativas + API + fix tests (50/50 passing, typecheck clean)
+- `3426624` — motor de alternativas + API + fix tests (58/58 passing, typecheck clean)
 - `22c1a84` — fase 2 análisis determinístico (normalize, queries, schemas IA)
 - `52b69c7` — fase 1 MercadoLibre (cliente, ítems, búsqueda, OAuth, rutas)
 
