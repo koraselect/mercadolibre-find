@@ -10,11 +10,12 @@
 | Phase 3 — Search | ✅ Completa (commit 3c1c0cc) |
 | Phase 4 — AI Matching | ✅ Completa (commit 3c1c0cc) |
 | Phase 5 — Economics | ✅ Completa (commit 3c1c0cc) |
-| Phase 6 — Persistence | ⏳ Pendiente (necesita Supabase) |
+| Phase 6 — Persistence | ✅ Completa (commit 9916afb) |
 | Phase 7 — UI | ⏳ Pendiente |
 | Phase 8 — Hardening | ⏳ Pendiente |
 
 **Commits recientes:**
+- `9916afb` — fase 6: persistence (Supabase + repositorios + historial)
 - `3c1c0cc` — fases 3-5: search orchestration, AI matching, economics
 - `3426624` — motor de alternativas + API + fix tests (50/50 passing, typecheck clean)
 - `22c1a84` — fase 2 análisis determinístico (normalize, queries, schemas IA)
