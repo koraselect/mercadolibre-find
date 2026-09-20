@@ -11,10 +11,11 @@
 | Phase 4 — AI Matching | ✅ Completa (commit 3c1c0cc) |
 | Phase 5 — Economics | ✅ Completa (commit 3c1c0cc) |
 | Phase 6 — Persistence | ✅ Completa (commit 9916afb) |
-| Phase 7 — UI | ⏳ Pendiente |
+| Phase 7 — UI | ✅ Completa (commit 3e0981f) |
 | Phase 8 — Hardening | ⏳ Pendiente |
 
 **Commits recientes:**
+- `3e0981f` — fase 7: UI (home, URL form, resultados, historial, ajustes)
 - `9916afb` — fase 6: persistence (Supabase + repositorios + historial)
 - `3c1c0cc` — fases 3-5: search orchestration, AI matching, economics
 - `3426624` — motor de alternativas + API + fix tests (50/50 passing, typecheck clean)
