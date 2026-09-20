@@ -7,6 +7,7 @@ interface ScrapeResult {
   price: number | null;
   currency: string | null;
   imageUrl: string | null;
+  isPaused: boolean;
   url: string;
   itemId: string | null;
 }
@@ -42,17 +43,22 @@ async function scrapeMLProduct(
     const json = (result as Record<string, unknown>).data as Record<string, unknown> | undefined;
     const extracted = json?.json as Record<string, unknown> | undefined;
     const metadata = json?.metadata as Record<string, unknown> | undefined;
+    const markdown = json?.markdown as string | undefined;
+
+    // Detect paused publication
+    const isPaused = !!(markdown && (
+      markdown.includes("Publicación pausada") ||
+      markdown.includes("publicación pausada") ||
+      markdown.includes("Publicacion pausada")
+    ));
 
     // Try to get image from metadata first, then markdown
     let imageUrl: string | null = (metadata?.ogImage as string) ?? null;
 
-    if (!imageUrl) {
-      const markdown = json?.markdown as string | undefined;
-      if (markdown) {
-        // Look for image in markdown ![alt](url)
-        const imgMatch = markdown.match(/!\[[^\]]*\]\((https?:\/\/[^)]+\.(?:webp|jpg|jpeg|png)[^)]*)\)/i);
-        if (imgMatch) imageUrl = imgMatch[1];
-      }
+    if (!imageUrl && markdown) {
+      // Look for image in markdown ![alt](url)
+      const imgMatch = markdown.match(/!\[[^\]]*\]\((https?:\/\/[^)]+\.(?:webp|jpg|jpeg|png)[^)]*)\)/i);
+      if (imgMatch) imageUrl = imgMatch[1];
     }
 
     return {
@@ -60,11 +66,12 @@ async function scrapeMLProduct(
       price: typeof extracted?.price === "number" ? extracted.price : null,
       currency: (extracted?.currency as string) || null,
       imageUrl,
+      isPaused,
       url,
       itemId,
     };
   } catch {
-    return { title: "", price: null, currency: null, imageUrl: null, url, itemId };
+    return { title: "", price: null, currency: null, imageUrl: null, isPaused: false, url, itemId };
   }
 }
 

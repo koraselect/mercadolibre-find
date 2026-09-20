@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Zap, Image as ImageIcon, Check } from "lucide-react";
+import { Crosshair, Loader2, Search, AlertCircle, ExternalLink, TrendingDown, DollarSign, Zap, Image as ImageIcon, Check, Pause } from "lucide-react";
 
 interface Candidate {
   title: string;
@@ -11,6 +11,7 @@ interface Candidate {
   price: number | null;
   currency: string | null;
   imageUrl: string | null;
+  isPaused: boolean;
 }
 
 interface SourceData {
@@ -238,13 +239,14 @@ export default function HomePage() {
           price: extractPrice(r.snippet + " " + r.title),
           currency: null,
           imageUrl: null,
+          isPaused: false,
         }))
         .filter((c: Candidate) => c.itemId && c.itemId !== sourceItemId);
 
-      // Step 2: Scrape top results for prices + images
+      // Step 2: Scrape ALL candidates for images + prices + pause detection
       const urlsToScrape = results
         .filter((c) => !c.price || !c.imageUrl)
-        .slice(0, 6)
+        .slice(0, 8)
         .map((c) => c.url);
 
       if (urlsToScrape.length > 0) {
@@ -257,9 +259,9 @@ export default function HomePage() {
           });
           const scrapeData = await scrapeRes.json();
           if (scrapeData.ok && scrapeData.results) {
-            const scrapeMap = new Map<string, { price: number | null; currency: string | null; imageUrl: string | null }>();
+            const scrapeMap = new Map<string, { price: number | null; currency: string | null; imageUrl: string | null; isPaused: boolean }>();
             for (const sr of scrapeData.results) {
-              if (sr.url) scrapeMap.set(sr.url, { price: sr.price, currency: sr.currency, imageUrl: sr.imageUrl });
+              if (sr.url) scrapeMap.set(sr.url, { price: sr.price, currency: sr.currency, imageUrl: sr.imageUrl, isPaused: sr.isPaused });
             }
             results = results.map((c) => {
               const scraped = scrapeMap.get(c.url);
@@ -269,6 +271,7 @@ export default function HomePage() {
                   price: scraped.price && !c.price ? scraped.price : c.price,
                   currency: scraped.currency || c.currency,
                   imageUrl: scraped.imageUrl || c.imageUrl,
+                  isPaused: scraped.isPaused || c.isPaused,
                 };
               }
               return c;
@@ -440,6 +443,12 @@ export default function HomePage() {
                       {diff && diff < 0 && (
                         <div className="absolute top-2 left-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">
                           +{Math.abs(parseFloat(pct!)).toFixed(1)}%
+                        </div>
+                      )}
+                      {c.isPaused && (
+                        <div className="absolute top-2 right-2 bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
+                          <Pause className="size-3" />
+                          Pausado
                         </div>
                       )}
                     </div>
